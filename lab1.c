@@ -6,6 +6,8 @@
 #include <sys/stat.h>
 #include <stdlib.h>
 
+#define BUFSIZE 1024
+
 // Archive file stream.
 int larc;
 // General-purpose buffer. Useful for changing data through functions.
@@ -43,7 +45,7 @@ void CorrectPackingPath(void)
 	for (int i = 0; i <= dif; i++)
 		tbuf[i] = buf[i + offset];
 	free(buf);
-	buf = (char *)calloc(1024, 1);
+	buf = (char *)calloc(BUFSIZE, 1);
 	for (int i = 0; i < dif; i++)
 		buf[i] = tbuf[i];
 	free(tbuf);
@@ -59,22 +61,43 @@ void PackIntoArchive(char *dirToPack)
 	size_t len;
 	struct dirent *fileinfo;
 	struct stat filestat;
+	int rdtest;
 
 	// Open directory.
 	printf("packing dir  %s\n", dirToPack);
 	chdir(dirToPack);
 	DIR *curDir = opendir(dirToPack);
+	if(curDir == null) {
+		printf("ERROR! Failed to open directory '%s'.\n", dirToPack);
+		printf("larc stopped with error.\n");
+		exit(11);
+	}
 	// Write dir info to restore directories on unpacking.
 	if (buf != NULL)
 		free(buf);
-	buf = (char *)calloc(1024, 1);
-	getcwd(buf, 1024);
+	buf = (char *)calloc(BUFSIZE, 1);
+	getcwd(buf, BUFSIZE);
 	CorrectPackingPath();
 	l = strlen(buf);
-	write(larc, &l, sizeof(l));
-	write(larc, buf, l);
+	rdtest = write(larc, &l, sizeof(l));
+	if(rdtest != sizeof(l)) {
+		printf("WRITE ERROR in PackIntoArchive().\n");
+		printf("larc stopped with error.\n");
+		exit(12);
+	}
+	rdtest = write(larc, buf, l);
+	if(rdtest != l) {
+		printf("WRITE ERROR in PackIntoArchive().\n");
+		printf("larc stopped with error.\n");
+		exit(12);
+	}
 	i = -1;
-	write(larc, &i, sizeof(i));
+	rdtest = write(larc, &i, sizeof(i));
+	if(rdtest != sizeof(i)) {
+		printf("WRITE ERROR in PackIntoArchive().\n");
+		printf("larc stopped with error.\n");
+		exit(12);
+	}
 	if (buf != NULL)
 		free(buf);
 	buf = NULL;
@@ -89,8 +112,8 @@ void PackIntoArchive(char *dirToPack)
 				strcmp("..", fileinfo->d_name) == 0)
 				continue;
 			// Recursively go to subdirectory.
-			buf = (char *)calloc(1024, 1);
-			getcwd(buf, 1024);
+			buf = (char *)calloc(BUFSIZE, 1);
+			getcwd(buf, BUFSIZE);
 			strcat(buf, "/");
 			strcat(buf, fileinfo->d_name);
 			PackIntoArchive(buf);
@@ -99,31 +122,54 @@ void PackIntoArchive(char *dirToPack)
 			buf = NULL;  
 		}  else  {
 			f = open(fileinfo->d_name, O_RDONLY);
-			
+			if(f == -1) {
+				printf("ERROR! Can't read file '%s'\n", fileinfo->d_name);
+			}
 			// For file - add to archive:
 			// - path length
-			buf = (char *)calloc(1024, 1);
-			getcwd(buf, 1024);
+			buf = (char *)calloc(BUFSIZE, 1);
+			getcwd(buf, BUFSIZE);
 			CorrectPackingPath();
 			strcat(buf, "/");
 			strcat(buf, fileinfo->d_name);
 			printf("packing file %s\n", buf);
 			len = strlen(buf);
-			write(larc, &len, sizeof(len));
-
+			rdtest = write(larc, &len, sizeof(len));
+			if(rdtest != sizeof(len)) {
+				printf("WRITE ERROR in PackIntoArchive().\n");
+				printf("larc stopped with error.\n");
+				exit(12);
+			}
 			// - relative path of the file with its name
-			write(larc, buf, len);
-
+			rdtest = write(larc, buf, len);
+			if(rdtest != len) {
+				printf("WRITE ERROR in PackIntoArchive().\n");
+				printf("larc stopped with error.\n");
+				exit(12);
+			}
 			// - file length
 			len = filestat.st_size;
-			write(larc, &len, sizeof(len));
-
+			rdtest = write(larc, &len, sizeof(len));
+			if(rdtest != sizeof(len)) {
+				printf("WRITE ERROR in PackIntoArchive().\n");
+				printf("larc stopped with error.\n");
+				exit(12);
+			}
 			// - file itself
 			free(buf);
 			buf = (char *)calloc(len, 1);
-			read(f, buf, (size_t)(len));
-			write(larc, buf, (size_t)(len));
-
+			rdtest = read(f, buf, (size_t)(len));
+			if(rdtest != (size_t)(len)) {
+				printf("READ ERROR in PackIntoArchive().\n");
+				printf("larc stopped with error.\n");
+				exit(13);
+			}
+			rdtest = write(larc, buf, (size_t)(len));
+			if(rdtest != (size_t)(len)) {
+				printf("WRITE ERROR in PackIntoArchive().\n");
+				printf("larc stopped with error.\n");
+				exit(12);
+			}
 			free(buf);
 			buf = NULL;
 			close(f);
@@ -143,11 +189,22 @@ void UnpackArchive(void)
 	char *tbuf;
 	char *filebuf;
 	int nf;
+	int rdtest;
 	
-	read(larc, &len, sizeof(len));
+	rdtest = read(larc, &len, sizeof(len));
+	if(rdtest != sizeof(len)) {
+		printf("READ ERROR in UnpackArchive().\n");
+		printf("larc stopped with error.\n");
+		exit(7);
+	}
 	buf = (char *)calloc(len+1, 1);
 	while (read(larc, buf, len) == len)  {
-		read(larc, &l, sizeof(l));
+		rdtest = read(larc, &l, sizeof(l));
+		if(rdtest != sizeof(l)) {
+			printf("READ ERROR in UnpackArchive().\n");
+			printf("larc stopped with error.\n");
+			exit(7);
+		}
 		// Make a path (suits both for folders and files).
 		tbuf = (char *)calloc(strlen(packingDir) + strlen(buf) + 1, 1);
 		strcat(tbuf, packingDir);
@@ -155,20 +212,47 @@ void UnpackArchive(void)
 		printf("creating entry %s\n", tbuf);
 		if (l == -1)  {
 			// It's a dir. Create it if it doesn't exist.
-			if (chdir(tbuf) == -1)
-				mkdir(tbuf, O_RDWR);
+			if (chdir(tbuf) == -1) {
+				rdtest = mkdir(tbuf, O_RDWR);
+				if(rdtest == -1) {
+					printf("ERROR! Failed to create directory '%s'.\n", tbuf);
+					printf("larc stopped with error.\n");
+					exit(10);
+				}
+				chmod(tbuf, 700);
+			}
 		}  else  {
 			// It's a file. Create it and fill in data.
 			filebuf = (char *)calloc(l, 1);
-			read(larc, filebuf, l);
+			rdtest = read(larc, filebuf, l);
+			if(rdtest != l) {
+				printf("READ ERROR in UnpackArchive().\n");
+				printf("larc stopped with error.\n");
+				exit(7);
+			}
 			nf = open(tbuf, O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR);
-			write(nf, filebuf, l);
+			if(nf == -1) {
+				printf("ERROR! Unable to create file '%s'.\n", tbuf);
+				printf("larc stopped with error.\n");
+				exit(9);
+			}
+			rdtest = write(nf, filebuf, l);
+			if(rdtest != l) {
+				printf("WRITE ERROR in UnpackArchive().\n");
+				printf("larc stopped with error.\n");
+				exit(8);
+			}
 			close(nf);
 			free(filebuf);
 		}
 		free(tbuf);
 		free(buf);
-		read(larc, &len, sizeof(len));
+		rdtest = read(larc, &len, sizeof(len));
+		if(rdtest != sizeof(len)) {
+			printf("READ ERROR in UnpackArchive().\n");
+			printf("larc stopped with error.\n");
+			exit(7);
+		}
 		buf = (char *)calloc(len+1, 1);
 	}
 }
@@ -190,7 +274,7 @@ int main(int argc, char *argv[])
 		exit(2);
 	}  else  {
 		if (strcmp(argv[1], "pack") == 0)  {
-			packingDir = (char *)calloc(1024, 1);
+			packingDir = (char *)calloc(BUFSIZE, 1);
 			if (chdir(argv[2]) == -1)  {
 				printf("ERROR! Can't pack dir with path = '%s'\n", argv[2]);
 				printf("Maybe you spell argument '2' wrongly.\n");
@@ -198,13 +282,18 @@ int main(int argc, char *argv[])
 				exit(3);
 			}
 			chdir("..");
-			getcwd(packingDir, 1024);
+			getcwd(packingDir, BUFSIZE);
 			// Create path for an archive and the archive itself.
 			chdir(argv[2]);
-			buf = (char *)calloc(1024, 1);
-			getcwd(buf, 1024);
+			buf = (char *)calloc(BUFSIZE, 1);
+			getcwd(buf, BUFSIZE);
 			strcat(buf, ".larc");
 			larc = open(buf, O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR);
+			if(larc == -1) {
+				printf("ERROR! Failed to create archive with path = '%s' \n", argv[2]);
+				printf("larc stopped with error.\n");
+				exit(6);
+			}
 			free(buf);
 			buf = NULL;
 			// Start packing.
