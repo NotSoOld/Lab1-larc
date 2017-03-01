@@ -1,12 +1,13 @@
 #include <unistd.h>
 #include <dirent.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <stdlib.h>
 
 // Archive file stream.
-FILE *larc;
+int larc;
 // General-purpose buffer. Useful for changing data through functions.
 char *buf;
 // Contains path to packing/unpacking directory 
@@ -18,6 +19,7 @@ void GetFilePath(char *fullPath)
 {
 	int i = 0;
 	int n = 0;
+	
 	while (fullPath[i] != '\0')  {
 		if (fullPath[i] == '/')
 		  n = i;
@@ -37,6 +39,7 @@ void CorrectPackingPath(void)
 	int dif = strlen(buf) - strlen(packingDir);
 	char *tbuf = (char *)calloc(dif + 1, 1);
 	int offset = strlen(packingDir);
+	
 	for (int i = 0; i <= dif; i++)
 		tbuf[i] = buf[i + offset];
 	free(buf);
@@ -50,6 +53,13 @@ void CorrectPackingPath(void)
 // into one file using strict data arrangement.
 void PackIntoArchive(char *dirToPack)
 {
+	size_t l;
+	long int i;
+	int f;
+	size_t len;
+	struct dirent *fileinfo;
+	struct stat filestat;
+
 	// Open directory.
 	printf("packing dir  %s\n", dirToPack);
 	chdir(dirToPack);
@@ -60,24 +70,23 @@ void PackIntoArchive(char *dirToPack)
 	buf = (char *)calloc(1024, 1);
 	getcwd(buf, 1024);
 	CorrectPackingPath();
-	size_t l = strlen(buf);
-	fwrite(&l, 1, sizeof(l), larc);
-	fwrite(buf, 1, l, larc);
-	long int i = -1;
-	fwrite(&i, 1, sizeof(i), larc);
+	l = strlen(buf);
+	write(larc, &l, sizeof(l));
+	write(larc, buf, l);
+	i = -1;
+	write(larc, &i, sizeof(i));
 	if (buf != NULL)
 		free(buf);
 	buf = NULL;
 	// Looking through dir entries. 
 	// Information about cur entry will be in 'fileinfo'.
-	struct dirent *fileinfo;
 	while ((fileinfo = readdir(curDir)) != NULL)  {
-		struct stat filestat;
 		lstat(fileinfo->d_name, &filestat);
 		// If it is not a file, but a subdirectory...
 		if (S_ISDIR(filestat.st_mode))  {
 			// Skip directories-'references'.
-			if (strcmp(".", fileinfo->d_name) == 0 || strcmp("..", fileinfo->d_name) == 0)
+			if (strcmp(".", fileinfo->d_name) == 0 || 
+				strcmp("..", fileinfo->d_name) == 0)
 				continue;
 			// Recursively go to subdirectory.
 			buf = (char *)calloc(1024, 1);
@@ -89,7 +98,7 @@ void PackIntoArchive(char *dirToPack)
 				free(buf);
 			buf = NULL;  
 		}  else  {
-			FILE *f = fopen(fileinfo->d_name, "rb");
+			f = open(fileinfo->d_name, O_RDONLY);
 			
 			// For file - add to archive:
 			// - path length
@@ -99,25 +108,25 @@ void PackIntoArchive(char *dirToPack)
 			strcat(buf, "/");
 			strcat(buf, fileinfo->d_name);
 			printf("packing file %s\n", buf);
-			size_t len = strlen(buf);
-			fwrite(&len, 1, sizeof(len), larc);
+			len = strlen(buf);
+			write(larc, &len, sizeof(len));
 
 			// - relative path of the file with its name
-			fwrite(buf, 1, len, larc);
+			write(larc, buf, len);
 
 			// - file length
 			len = filestat.st_size;
-			fwrite(&len, 1, sizeof(len), larc);
+			write(larc, &len, sizeof(len));
 
 			// - file itself
 			free(buf);
 			buf = (char *)calloc(len, 1);
-			fread(buf, 1, (size_t)(len), f);
-			fwrite(buf, 1, (size_t)(len), larc);
+			read(f, buf, (size_t)(len));
+			write(larc, buf, (size_t)(len));
 
 			free(buf);
 			buf = NULL;
-			fclose(f);
+			close(f);
 		}
 	}
 
@@ -130,33 +139,37 @@ void PackIntoArchive(char *dirToPack)
 void UnpackArchive(void)
 {
 	size_t len;
-	fread(&len, 1, sizeof(len), larc);
-	while (!feof(larc))  {
-		buf = (char *)calloc(len+1, 1);
-		fread(buf, 1, len, larc);
-		long int l;
-		fread(&l, 1, sizeof(l), larc);
+	long int l;
+	char *tbuf;
+	char *filebuf;
+	int nf;
+	
+	read(larc, &len, sizeof(len));
+	buf = (char *)calloc(len+1, 1);
+	while (read(larc, buf, len) == len)  {
+		read(larc, &l, sizeof(l));
 		// Make a path (suits both for folders and files).
-		char *tbuf = (char *)calloc(strlen(packingDir) + strlen(buf) + 1, 1);
+		tbuf = (char *)calloc(strlen(packingDir) + strlen(buf) + 1, 1);
 		strcat(tbuf, packingDir);
 		strcat(tbuf, buf);
 		printf("creating entry %s\n", tbuf);
 		if (l == -1)  {
 			// It's a dir. Create it if it doesn't exist.
 			if (chdir(tbuf) == -1)
-				mkdir(tbuf, 0600);
+				mkdir(tbuf, O_RDWR);
 		}  else  {
 			// It's a file. Create it and fill in data.
-			char *filebuf = (char *)calloc(l, 1);
-			fread(filebuf, 1, l, larc);
-			FILE *nf = fopen(tbuf, "wb");
-			fwrite(filebuf, 1, l, nf);
-			fclose(nf);
+			filebuf = (char *)calloc(l, 1);
+			read(larc, filebuf, l);
+			nf = open(tbuf, O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR);
+			write(nf, filebuf, l);
+			close(nf);
 			free(filebuf);
 		}
 		free(tbuf);
 		free(buf);
-		fread(&len, 1, sizeof(len), larc);
+		read(larc, &len, sizeof(len));
+		buf = (char *)calloc(len+1, 1);
 	}
 }
 
@@ -168,7 +181,7 @@ int main(int argc, char *argv[])
 		printf("1) 'pack' or 'unpack' action keyword;\n");
 		printf("  after completing action, target directory");
 		printf(" and archive will be in the same folder.\n");
-		printf("2) path to directory which you want to pack\n\t\t\tOR\n");
+		printf("2) path to directory which you want to pack\n\t\tOR\n");
 		printf("   path to archive you want to unpack.\n");
 		exit(1);
 	}  else if (argc < 3 || argc > 3)  {
@@ -179,7 +192,7 @@ int main(int argc, char *argv[])
 		if (strcmp(argv[1], "pack") == 0)  {
 			packingDir = (char *)calloc(1024, 1);
 			if (chdir(argv[2]) == -1)  {
-				printf("ERROR! Cannot pack directory with path = '%s'\n", argv[2]);
+				printf("ERROR! Can't pack dir with path = '%s'\n", argv[2]);
 				printf("Maybe you spell argument '2' wrongly.\n");
 				printf("larc stopped with error.\n");
 				exit(3);
@@ -191,27 +204,27 @@ int main(int argc, char *argv[])
 			buf = (char *)calloc(1024, 1);
 			getcwd(buf, 1024);
 			strcat(buf, ".larc");
-			larc = fopen(buf, "wb");
+			larc = open(buf, O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR);
 			free(buf);
 			buf = NULL;
 			// Start packing.
 			PackIntoArchive(argv[2]);
-			fclose(larc);
+			close(larc);
 			free(packingDir);
 		}  else if (strcmp(argv[1], "unpack") == 0)  {
 			GetFilePath(argv[2]);
 			packingDir = (char *)calloc(strlen(buf)+1, 1);
 			strcpy(packingDir, buf);
-			printf("%s\n", packingDir);
 			free(buf);
-			larc = fopen(argv[2], "rb");
-			if (larc == NULL)  {
-				printf("ERROR! Archive with path = '%s' doesn't exist.\n", argv[2]);
+			larc = open(argv[2], O_RDONLY);
+			if (larc == -1)  {
+				printf("ERROR! Archive with path = '%s' ", argv[2]);
+				printf("doesn't exist.\n");
 				printf("larc stopped with error.\n");
 				exit(5);
 			}
 			UnpackArchive();
-			fclose(larc);
+			close(larc);
 			free(packingDir);
 		}  else  {
 			printf("ERROR! Cannot understand argument '1' = '%s'\n", argv[1]);
