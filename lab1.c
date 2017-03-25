@@ -67,7 +67,7 @@ void PackIntoArchive(char *dirToPack)
 	printf("packing dir  %s\n", dirToPack);
 	chdir(dirToPack);
 	DIR *curDir = opendir(dirToPack);
-	if(curDir == null) {
+	if(curDir == NULL) {
 		printf("ERROR! Failed to open directory '%s'.\n", dirToPack);
 		printf("larc stopped with error.\n");
 		exit(11);
@@ -201,7 +201,7 @@ void UnpackArchive(void)
 	while (read(larc, buf, len) == len)  {
 		rdtest = read(larc, &l, sizeof(l));
 		if(rdtest != sizeof(l)) {
-			printf("READ ERROR in UnpackArchive().\n");
+			printf("READ ERROR in UnpackArchive(1).\n");
 			printf("larc stopped with error.\n");
 			exit(7);
 		}
@@ -219,7 +219,7 @@ void UnpackArchive(void)
 					printf("larc stopped with error.\n");
 					exit(10);
 				}
-				chmod(tbuf, 700);
+				chmod(tbuf, 0700);
 			}
 		}  else  {
 			// It's a file. Create it and fill in data.
@@ -249,9 +249,7 @@ void UnpackArchive(void)
 		free(buf);
 		rdtest = read(larc, &len, sizeof(len));
 		if(rdtest != sizeof(len)) {
-			printf("READ ERROR in UnpackArchive().\n");
-			printf("larc stopped with error.\n");
-			exit(7);
+			break;
 		}
 		buf = (char *)calloc(len+1, 1);
 	}
